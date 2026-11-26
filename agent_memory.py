@@ -15,70 +15,154 @@ from tools import get_order_status
 # State stores information shared between different nodes.
 # LangGraph updates this information as the workflow executes.
 
+# ===================================
+# 2. DEFINE AGENT STATE
+# ===================================
+
 class AgentState(TypedDict):
 
-    message: str             # Current customer message
-    intent: str              # Detected customer intent
-    order_id: str            # Extracted order ID
-    response: str            # Final response to the customer
-    awaiting_order_id: bool  # Whether the agent is waiting for an ID
+    message: str
+    intent: str
+    previous_intent: str
+    order_id: str
+    response: str
+    awaiting_order_id: bool
 
 
-# 2. Classification node
+# ===================================
+# 3. INTENT CLASSIFICATION NODE
+# ===================================
 
 def classify_node(state: AgentState):
 
-    # Read the current customer message from the state
+    # Retrieve the current customer message.
 
     message = state["message"]
 
-    # Check previous conversation state.
-    # If the agent previously requested an order ID,
-    # try to interpret the current message as an order ID.
+    # Normalize the message for pattern matching.
 
-    if state.get("awaiting_order_id", False):
+    cleaned_message = message.strip().upper()
 
-        # Accept different formats:
-        # ORD-102, 102, It's 102, My order ID is 102
+    # Retrieve the intent from the previous conversation turn.
 
-        match = re.fullmatch(
-            r"(?:IT['’]S\s+|MY ORDER ID IS\s+)?(?:ORD-)?(\d+)[.!]?",
-            message.strip().upper()
-        )
+    previous_intent = state.get("intent", "")
 
-        if match:
+    # Check whether the agent is waiting for an order ID.
 
-            order_id = "ORD-" + match.group(1)
+    awaiting_order_id = state.get(
+        "awaiting_order_id",
+        False
+    )
 
-            print("[MEMORY] Remembered pending order inquiry")
+    print("[MEMORY] Previous intent:", previous_intent)
 
-            # Skip LLM classification because the previous
-            # conversation already establishes the intent.
+    print(
+        "[MEMORY] Awaiting order ID:",
+        awaiting_order_id
+    )
 
-            return {
-                "intent": "order_status",
-                "order_id": order_id
-            }
 
-    # Otherwise classify normally using Qwen.
-    # classify_intent() is imported from intent.py.
+    # -----------------------------------
+    # CHECK FOR STANDALONE ORDER NUMBER
+    # -----------------------------------
+
+    # Examples:
+    # 102, ORD-102, It's 102,
+    # My order ID is 102
+
+    match = re.fullmatch(
+        r"(?:IT['’]S\s+|MY ORDER ID IS\s+)?"
+        r"(?:ORD-)?(\d+)[.!]?",
+        cleaned_message
+    )
+
+
+    # -----------------------------------
+    # CHECK PREVIOUS ORDER CONTEXT
+    # -----------------------------------
+
+    if match and (
+        awaiting_order_id
+        or previous_intent == "order_status"
+    ):
+
+        order_id = "ORD-" + match.group(1)
+
+        print("[MEMORY] Order context detected")
+
+        print("[DEBUG] Order ID:", order_id)
+
+        return {
+            "intent": "order_status",
+            "previous_intent": previous_intent,
+            "order_id": order_id,
+            "awaiting_order_id": False
+        }
+
+
+    # -----------------------------------
+    # CHECK EXPLICIT ORDER ID
+    # -----------------------------------
+
+    # Example: ORD-105
+
+    explicit_match = re.fullmatch(
+        r"ORD-\d+[.!]?",
+        cleaned_message
+    )
+
+    if explicit_match:
+
+        order_id = explicit_match.group().rstrip(".!")
+
+        return {
+            "intent": "order_status",
+            "previous_intent": previous_intent,
+            "order_id": order_id,
+            "awaiting_order_id": False
+        }
+
+
+    # -----------------------------------
+    # HANDLE AMBIGUOUS NUMERIC INPUT
+    # -----------------------------------
+
+    # Do not send standalone numbers to RAG
+    # when no relevant order context exists.
+
+    if match:
+
+        print("[DEBUG] Ambiguous numeric input")
+
+        return {
+            "intent": "clarification",
+            "previous_intent": previous_intent,
+            "order_id": "",
+            "awaiting_order_id": False
+        }
+
+
+    # -----------------------------------
+    # NORMAL LLM CLASSIFICATION
+    # -----------------------------------
 
     intent = classify_intent(message)
 
     print("[DEBUG] Detected intent:", intent)
 
-    # Extract an order ID if it is present in the message.
+    # Extract an explicit order ID from the sentence.
 
-    match = re.search(r"ORD-\d+", message.upper())
-
-    # Update the state.
-    # Preserve pending order memory during casual conversation.
+    match = re.search(
+        r"ORD-\d+",
+        cleaned_message
+    )
 
     return {
         "intent": intent,
+        "previous_intent": previous_intent,
         "order_id": match.group() if match else "",
         "awaiting_order_id": (
-            state.get("awaiting_order_id", False)
+            awaiting_order_id
             if intent == "chitchat"
             else False
         )
@@ -248,6 +332,24 @@ Stay focused on customer support.
         )
     }
 
+# CLARIFICATION NODE
+# ===================================
+
+def clarification_node(state: AgentState):
+
+    # Handle ambiguous customer messages
+    # without retrieving unrelated information.
+
+    print("[ROUTE] Clarification required")
+
+    return {
+        "response": (
+            "Could you please clarify your request? "
+            "Are you referring to an order ID?"
+        ),
+        "awaiting_order_id": False
+    }
+
 
 # 9. Routing function
 
@@ -276,12 +378,18 @@ workflow.add_node("hours", hours_node)
 workflow.add_node("human", human_node)
 workflow.add_node("general", general_node)
 workflow.add_node("chitchat", chitchat_node)
+workflow.add_node("clarification", clarification_node)
 
 
 # Define the starting point.
 # Every customer message first enters the classification node.
 
 workflow.add_edge(START, "classify")
+
+
+
+
+
 
 
 # Define conditional edges.
@@ -296,7 +404,8 @@ workflow.add_conditional_edges(
         "business_hours": "hours",
         "human_support": "human",
         "general": "general",
-        "chitchat": "chitchat"
+        "chitchat": "chitchat",
+        "clarification": "clarification"
     }
 )
 
@@ -311,8 +420,10 @@ for node in [
     "hours",
     "human",
     "general",
-    "chitchat"
+    "chitchat",
+    "clarification"
 ]:
+    
     workflow.add_edge(node, END)
 
 

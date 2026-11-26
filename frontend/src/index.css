@@ -1,0 +1,86 @@
+
+/* ===================================
+   1. GLOBAL RESET
+   =================================== */
+
+* {
+
+    box-sizing: border-box;
+}
+
+html {
+
+    min-height: 100%;
+
+    color-scheme: dark;
+}
+
+body {
+
+    margin: 0;
+
+    min-width: 320px;
+
+    min-height: 100vh;
+
+    background: #0b1120;
+
+    color: #f1f5f9;
+
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    -webkit-font-smoothing: antialiased;
+}
+
+
+/* ===================================
+   2. ROOT CONTAINER
+   =================================== */
+
+#root {
+
+    width: 100%;
+
+    min-height: 100vh;
+}
+
+
+/* ===================================
+   3. GLOBAL INPUT AND BUTTON STYLING
+   =================================== */
+
+button,
+input {
+
+    font: inherit;
+}
+
+button {
+
+    cursor: pointer;
+}
+
+button:disabled {
+
+    opacity: 0.5;
+
+    cursor: not-allowed;
+}
+
+button:focus-visible {
+
+    outline: 2px solid #60a5fa;
+
+    outline-offset: 3px;
+}
+
+::selection {
+
+    background: #2563eb;
+
+    color: white;
+}

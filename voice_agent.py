@@ -6,14 +6,21 @@
 import time
 import requests
 
-# Import microphone recording function
-from audio_recorder import record_audio
+# Import automatic microphone recording.
 
-# Import speech recognition function
+from audio_recorder import record_until_silence
+
+# Import Speech-to-Text.
+
 from stt import transcribe_audio
 
-# Import speech generation and playback
+# Import Text-to-Speech and audio playback.
+
 from tts import generate_speech, play_audio
+
+# Import spoken order ID normalization.
+
+from speech_utils import normalize_order_id
 
 
 # ===================================
@@ -22,9 +29,15 @@ from tts import generate_speech, play_audio
 
 URL = "http://127.0.0.1:8000/chat"
 
-# Store the conversation session ID.
+# Store the session ID to maintain
+# conversation memory across multiple requests.
 
 session_id = None
+
+# Track whether the agent is waiting
+# for the customer to provide an order ID.
+
+awaiting_order_id = False
 
 
 # ===================================
@@ -33,14 +46,15 @@ session_id = None
 
 def send_message(message, session_id):
 
-    # Prepare customer message and conversation ID.
+    # Prepare the customer message
+    # and conversation session ID.
 
     payload = {
         "message": message,
         "session_id": session_id
     }
 
-    # Send the message to our FastAPI backend.
+    # Send an HTTP POST request to FastAPI.
 
     response = requests.post(
         URL,
@@ -48,74 +62,178 @@ def send_message(message, session_id):
         timeout=120
     )
 
-    # Check whether the API request succeeded.
+    # Check whether the request succeeded.
 
     response.raise_for_status()
 
-    # Return the JSON response as a dictionary.
+    # Convert the JSON response into a dictionary.
 
     return response.json()
 
 
 # ===================================
-# 4. START VOICE CONVERSATION
+# 4. SPEAK AI RESPONSE
+# ===================================
+
+def speak(text):
+
+    # Convert text into a WAV audio file.
+
+    filename = generate_speech(
+        text,
+        filename="response.wav"
+    )
+
+    # Play the generated audio.
+
+    play_audio(filename)
+
+
+# ===================================
+# 5. DETECT CONVERSATION END
+# ===================================
+
+def should_end_conversation(message):
+
+    # Define common spoken exit commands.
+
+    exit_commands = [
+        "goodbye",
+        "good bye",
+        "bye",
+        "exit",
+        "end call",
+        "end the call",
+        "hang up",
+        "thank you goodbye",
+        "thank you bye",
+        "thanks goodbye",
+        "bye bye"
+    ]
+
+    # Normalize the customer message.
+
+    cleaned = message.lower()
+
+    # Remove common punctuation.
+
+    for symbol in [",", ".", "!", "?"]:
+
+        cleaned = cleaned.replace(symbol, " ")
+
+    # Remove unnecessary spaces.
+
+    cleaned = " ".join(cleaned.split())
+
+    # Check whether the customer wants
+    # to terminate the conversation.
+
+    return cleaned in exit_commands
+
+
+# ===================================
+# 6. START VOICE CONVERSATION
 # ===================================
 
 if __name__ == "__main__":
 
+    print("=" * 45)
     print("AI Business Voice Agent")
-    print("Press Enter to speak.")
-    print("Type 'exit' to stop.")
+    print("Automatic Conversation Mode")
+    print("Say 'goodbye' to end the conversation.")
+    print("Press Ctrl+C to stop manually.")
+    print("=" * 45)
 
     # Introduce the AI agent to the customer.
 
     greeting = (
-        "Hello! I am an AI customer support assistant. "
+        "Hello! I am your AI customer support assistant. "
         "How can I help you today?"
     )
 
-    greeting_file = generate_speech(greeting)
+    print("\nAgent:", greeting)
 
-    play_audio(greeting_file)
+    try:
 
+        speak(greeting)
 
-    # Continue the conversation until the customer exits.
+        # Continue listening until the customer
+        # terminates the conversation.
 
-    while True:
+        while True:
 
-        command = input("\nPress Enter to speak: ")
+            # -----------------------------------
+            # STEP 1: RECORD CUSTOMER SPEECH
+            # -----------------------------------
 
-        if command.lower().strip() == "exit":
-            break
+            # Automatically start recording when
+            # speech is detected and stop after silence.
 
-        try:
-
-            # Step 1: Record customer speech.
-
-            audio_file = record_audio(
-                filename="customer.wav",
-                duration=5
+            audio_file = record_until_silence(
+                filename="customer.wav"
             )
+
+            # Continue listening if no speech is detected.
+
+            if audio_file is None:
+
+                continue
+
+            # Record the starting time to measure
+            # response preparation latency.
 
             start_time = time.perf_counter()
 
 
-            # Step 2: Convert speech into text.
+            # -----------------------------------
+            # STEP 2: CONVERT SPEECH INTO TEXT
+            # -----------------------------------
 
             message = transcribe_audio(audio_file)
 
-            # Ignore recordings without recognized speech.
+            # Ignore empty transcriptions.
 
             if not message.strip():
 
-                print("No speech detected. Please try again.")
+                print("[STT] No speech recognized.")
 
                 continue
 
             print("\nCustomer:", message)
 
 
-            # Step 3: Send customer message to FastAPI.
+            # -----------------------------------
+            # STEP 3: CHECK CONVERSATION END
+            # -----------------------------------
+
+            if should_end_conversation(message):
+
+                print("[CALL] Customer ended conversation.")
+
+                break
+
+
+            # -----------------------------------
+            # STEP 4: NORMALIZE SPOKEN ORDER ID
+            # -----------------------------------
+
+            # Apply normalization only when the
+            # backend is expecting an order ID.
+
+            if awaiting_order_id:
+
+                original_message = message
+
+                message = normalize_order_id(message)
+
+                print("[ORIGINAL]", original_message)
+
+                print("[NORMALIZED]", message)
+
+
+            # -----------------------------------
+            # STEP 5: SEND MESSAGE TO FASTAPI
+            # -----------------------------------
 
             result = send_message(
                 message,
@@ -123,20 +241,47 @@ if __name__ == "__main__":
             )
 
 
-            # Step 4: Preserve conversation memory.
+            # -----------------------------------
+            # STEP 6: UPDATE CONVERSATION STATE
+            # -----------------------------------
+
+            # Preserve the session ID for memory.
 
             session_id = result["session_id"]
 
+            # Check whether the agent is waiting
+            # for an order ID.
+
+            awaiting_order_id = result.get(
+                "awaiting_order_id",
+                False
+            )
+
+            # Extract the AI-generated response.
+
             answer = result["response"]
 
-            print("Agent:", answer)
+            print("\nAgent:", answer)
 
             print("[INTENT]", result["intent"])
 
-            print("[API LATENCY]", result["latency"])
+            print("[SESSION]", session_id)
+
+            print(
+                "[AWAITING ORDER ID]",
+                awaiting_order_id
+            )
+
+            print(
+                "[API LATENCY]",
+                result["latency"],
+                "seconds"
+            )
 
 
-            # Step 5: Convert the AI response into speech.
+            # -----------------------------------
+            # STEP 7: GENERATE SPEECH
+            # -----------------------------------
 
             response_file = generate_speech(
                 answer,
@@ -144,7 +289,9 @@ if __name__ == "__main__":
             )
 
 
-            # Step 6: Measure response preparation time.
+            # -----------------------------------
+            # STEP 8: MEASURE VOICE LATENCY
+            # -----------------------------------
 
             latency = time.perf_counter() - start_time
 
@@ -155,20 +302,51 @@ if __name__ == "__main__":
             )
 
 
-            # Step 7: Play the generated response.
+            # -----------------------------------
+            # STEP 9: PLAY AI RESPONSE
+            # -----------------------------------
 
             play_audio(response_file)
 
-
-        except Exception as error:
-
-            print("[ERROR]", error)
+            # Once playback is completed, the loop
+            # automatically starts listening again.
 
 
-    # End the conversation politely.
+    # ===================================
+    # 7. HANDLE EXCEPTIONS
+    # ===================================
 
-    goodbye_file = generate_speech(
+    except KeyboardInterrupt:
+
+        print("\n[CALL] Conversation interrupted.")
+
+
+    except requests.exceptions.RequestException as error:
+
+        print("[API ERROR]", error)
+
+
+    except Exception as error:
+
+        print("[ERROR]", error)
+
+
+    # ===================================
+    # 8. END CONVERSATION
+    # ===================================
+
+    goodbye = (
         "Thank you for contacting us. Goodbye!"
     )
 
-    play_audio(goodbye_file)
+    print("\nAgent:", goodbye)
+
+    try:
+
+        speak(goodbye)
+
+    except Exception as error:
+
+        print("[TTS ERROR]", error)
+
+    print("[CALL] Conversation ended.")
