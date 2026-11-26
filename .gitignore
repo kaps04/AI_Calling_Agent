@@ -1,0 +1,23 @@
+# Environment and secrets
+.env
+.env.*
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Databases
+*.db
+*.sqlite3
+
+# Vector database
+vector_db/
+
+# Audio recordings
+*.wav
+
+# Downloaded voice models
+voices/*.onnx
+voices/*.onnx.json

@@ -1,0 +1,9 @@
+Standard shipping takes 3 to 5 business days.
+
+Express shipping takes 1 to 2 business days.
+
+Standard shipping costs $5.
+
+Orders above $100 qualify for free standard shipping.
+
+Customers can track their orders using their order ID.
